@@ -30,6 +30,12 @@ async function run() {
     const db = client.db("ecoTrac");
     const challengesCollection = db.collection("challenges");
 
+    app.post("/api/challenges", async (req, res) => {
+      const cursor = req.body;
+      const result = await challengesCollection.insertOne(cursor);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
