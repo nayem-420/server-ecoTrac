@@ -5,7 +5,12 @@ const app = express();
 const { MongoClient, ServerApiVersion } = require("mongodb");
 
 // middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:5174",
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // port connection
