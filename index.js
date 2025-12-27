@@ -6,7 +6,6 @@ const { MongoClient, ServerApiVersion } = require("mongodb");
 // port connection
 const port = process.env.PORT || 3000;
 
-
 // mongodb connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.rn5tut0.mongodb.net/?appName=Cluster0`;
 
@@ -16,18 +15,21 @@ const client = new MongoClient(uri, {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
 app.get("/", (req, res) => {
   res.send("Eco-Trac is tracking you....!");
 });
 
-
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
+
+    const db = client.db("ecoTrac");
+    const challengesCollection = db.collection("challenges");
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
