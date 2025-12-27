@@ -49,8 +49,15 @@ async function run() {
 
     //   see api challenges
     app.get("/challenges", async (req, res) => {
-      const result = await challengesCollection.find().toArray();
-      res.send(result);
+      try {
+        const result = await challengesCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res
+          .status(500)
+          .send({ error: "Something went wrong fetching challenges" });
+      }
     });
 
     //   see challenges with id
