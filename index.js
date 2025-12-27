@@ -35,9 +35,16 @@ async function run() {
     const db = client.db("ecoTrac");
     const challengesCollection = db.collection("challenges");
 
+    //   create api challenges
     app.post("/api/challenges", async (req, res) => {
       const cursor = req.body;
       const result = await challengesCollection.insertOne(cursor);
+      res.send(result);
+    });
+
+    //   see api challenges
+    app.get("/api/challenges", async (req, res) => {
+      const result = await challengesCollection.find().toArray();
       res.send(result);
     });
 
