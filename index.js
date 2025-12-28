@@ -91,7 +91,21 @@ async function run() {
       res.send({ message: "Joined successfully" });
     });
 
-      
+    // Get user's joined challenges
+    app.get("/my-activities/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        const result = await challengesCollection
+          .find({ joinedUsers: email })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Failed to fetch activities" });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
