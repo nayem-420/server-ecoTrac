@@ -69,6 +69,30 @@ async function run() {
       res.send(result);
     });
 
+    //   creating challenges/join/:id
+    app.post("/challenges/join/:id", async (req, res) => {
+      const id = req.params.id;
+      const userEmail = req.body.email;
+
+      const result = await challengesCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $inc: { participants: 1 },
+          $addToSet: { joinedUsers: userEmail },
+        }
+      );
+
+      if (result.modifiedCount === 0) {
+        return res
+          .status(400)
+          .send({ message: "Challenge not found or already joined" });
+      }
+
+      res.send({ message: "Joined successfully" });
+    });
+
+      
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
