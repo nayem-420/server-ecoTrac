@@ -7,7 +7,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 // middleware
 app.use(
   cors({
-    origin: "http://localhost:5174",
+    origin: ["http://localhost:5174","http://localhost:5173"],
     credentials: true,
   })
 );
@@ -40,7 +40,7 @@ async function run() {
     const db = client.db("ecoTrac");
     const challengesCollection = db.collection("challenges");
     const usersCollection = db.collection("users");
-    const userActivitiesCollection = db.collection("user_activities");
+    const userChallengeCollection = db.collection("user_activities");
 
     // Create or update user
     app.post("/users", async (req, res) => {
@@ -97,6 +97,42 @@ async function run() {
       }
     });
 
+    //   user challenges part
+    app.post("/user-challenges", async (req, res) => {
+      try {
+        const { userId, challengeId } = req.body;
+
+        const existing = await userChallengeCollection.findOne({
+          userId,
+          challengeId,
+        });
+        if (existing) {
+          return res.send({
+            message: "Already joined",
+            userChallenge: existing,
+          });
+        }
+
+        const newUserChallenge = {
+          userId,
+          challengeId,
+          status: "Not Started",
+          progress: 0,
+          joinedDate: new Date(),
+        };
+        const result = await userChallengeCollection.insertOne(
+          newUserChallenge
+        );
+        res.send({
+          message: "challenge joined Successfully",
+          userChallenge: newUserChallenge,
+        });
+      } catch (error) {
+        console.log(error);
+        res.status(500).send({ error: "Failed to join challenge" });
+      }
+    });
+
     //   create api challenges
     app.post("/challenges", async (req, res) => {
       const cursor = req.body;
@@ -136,7 +172,6 @@ async function run() {
           return res.status(400).send({ message: "Email is required" });
         }
 
-        // Check if challenge exists
         const challenge = await challengesCollection.findOne({
           _id: new ObjectId(id),
         });
@@ -145,17 +180,10 @@ async function run() {
           return res.status(404).send({ message: "Challenge not found" });
         }
 
-        // Check if user already joined
-        if (
-          challenge.joinedUsers &&
-          challenge.joinedUsers.includes(userEmail)
-        ) {
-          return res
-            .status(400)
-            .send({ message: "Already joined this challenge" });
+        if (challenge.joinedUsers?.includes(userEmail)) {
+          return res.send({ message: "Already Joined" });
         }
 
-        // Create initial user progress
         const initialProgress = {
           email: userEmail,
           joinedDate: new Date().toISOString(),
@@ -164,52 +192,60 @@ async function run() {
           pointsEarned: 0,
           currentStreak: 0,
           longestStreak: 0,
-          lastActivityDate: null,
           achievements: [],
-          notes: [],
         };
 
-        // Update challenge with new user
-        const result = await challengesCollection.updateOne(
+        await challengesCollection.updateOne(
           { _id: new ObjectId(id) },
           {
-            $inc: { participants: 1 },
             $addToSet: { joinedUsers: userEmail },
             $push: { userProgress: initialProgress },
+            $inc: { participants: 1 },
           }
         );
 
-        if (result.modifiedCount === 0) {
-          return res.status(400).send({ message: "Failed to join challenge" });
-        }
+        await usersCollection.updateOne(
+          { email: userEmail },
+          { $inc: { totalChallengesJoined: 1 } }
+        );
 
-        res.send({
-          message: "Joined successfully",
-          userProgress: initialProgress,
-        });
+        res.send({ message: "Joined successfully", progress: initialProgress });
       } catch (error) {
-        console.error("Error joining challenge:", error);
+        console.error(error);
         res.status(500).send({ error: "Failed to join challenge" });
       }
     });
 
     // Get user's joined challenges
-    app.get("/my-activities/:email", async (req, res) => {
+    app.get("/my-activities/user/:email", async (req, res) => {
       try {
         const email = req.params.email;
 
-        const result = await challengesCollection
-          .find({ joinedUsers: email })
+        const user = await usersCollection.findOne({ email });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        const userId = user._id.toString();
+
+        const joinedChallenges = await userChallengeCollection
+          .find({ userId })
           .toArray();
 
-        res.send(result);
+        if (joinedChallenges.length === 0) return res.send([]);
+
+        const challengeIds = joinedChallenges.map((item) => item.challengeId);
+
+        const challenges = await challengesCollection
+          .find({ _id: { $in: challengeIds.map((id) => new ObjectId(id)) } })
+          .toArray();
+
+        res.send(challenges);
       } catch (error) {
         console.error(error);
         res.status(500).send({ error: "Failed to fetch activities" });
       }
     });
 
-    app.get("/my-activities/:id", async (req, res) => {
+    app.get("/my-activities/challenge/:id", async (req, res) => {
       try {
         const id = req.params.id;
         const userEmail = req.query.email;
@@ -240,7 +276,6 @@ async function run() {
           notes: [],
         };
 
-        // Calculate additional metrics
         const today = new Date();
         const startDate = new Date(challenge.startDate);
         const endDate = new Date(challenge.endDate);
@@ -279,258 +314,6 @@ async function run() {
       } catch (error) {
         console.error(error);
         res.status(500).send({ error: "Failed to fetch activity details" });
-      }
-    });
-
-    app.post("/my-activities/:id/complete-day", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { email, day, note } = req.body;
-
-        if (!email || !day) {
-          return res.status(400).send({ error: "Email and day are required" });
-        }
-
-        const challenge = await challengesCollection.findOne({
-          _id: new ObjectId(id),
-          joinedUsers: email,
-        });
-
-        if (!challenge) {
-          return res.status(404).send({ error: "Challenge not found" });
-        }
-
-        // Find user progress
-        const userProgressIndex = challenge.userProgress?.findIndex(
-          (p) => p.email === email
-        );
-
-        let updatedProgress;
-
-        if (userProgressIndex === -1 || !challenge.userProgress) {
-          updatedProgress = {
-            email,
-            joinedDate: new Date().toISOString(),
-            completedDays: [day],
-            totalDaysCompleted: 1,
-            pointsEarned: 10,
-            currentStreak: 1,
-            longestStreak: 1,
-            lastActivityDate: new Date().toISOString(),
-            achievements: ["First Step"],
-            notes: note
-              ? [{ day, note, timestamp: new Date().toISOString() }]
-              : [],
-          };
-
-          await challengesCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $push: { userProgress: updatedProgress } }
-          );
-        } else {
-          // Update existing progress
-          const currentProgress = challenge.userProgress[userProgressIndex];
-
-          // Check if day already completed
-          if (currentProgress.completedDays.includes(day)) {
-            return res.status(400).send({ error: "Day already completed" });
-          }
-
-          // Calculate streak
-          const newCompletedDays = [...currentProgress.completedDays, day].sort(
-            (a, b) => a - b
-          );
-          const lastDay = newCompletedDays[newCompletedDays.length - 2] || 0;
-          const isConsecutive = day === lastDay + 1;
-          const newStreak = isConsecutive
-            ? currentProgress.currentStreak + 1
-            : 1;
-          const newLongestStreak = Math.max(
-            newStreak,
-            currentProgress.longestStreak
-          );
-
-          // Calculate achievements
-          const newAchievements = [...currentProgress.achievements];
-          if (
-            newCompletedDays.length === 1 &&
-            !newAchievements.includes("First Step")
-          ) {
-            newAchievements.push("First Step");
-          }
-          if (
-            newCompletedDays.length === 7 &&
-            !newAchievements.includes("Week Warrior")
-          ) {
-            newAchievements.push("Week Warrior");
-          }
-          if (newStreak === 7 && !newAchievements.includes("7-Day Streak")) {
-            newAchievements.push("7-Day Streak");
-          }
-          if (
-            newCompletedDays.length === challenge.duration &&
-            !newAchievements.includes("Challenge Master")
-          ) {
-            newAchievements.push("Challenge Master");
-          }
-
-          updatedProgress = {
-            ...currentProgress,
-            completedDays: newCompletedDays,
-            totalDaysCompleted: newCompletedDays.length,
-            pointsEarned: currentProgress.pointsEarned + 10,
-            currentStreak: newStreak,
-            longestStreak: newLongestStreak,
-            lastActivityDate: new Date().toISOString(),
-            achievements: newAchievements,
-            notes: note
-              ? [
-                  ...currentProgress.notes,
-                  { day, note, timestamp: new Date().toISOString() },
-                ]
-              : currentProgress.notes,
-          };
-
-          await challengesCollection.updateOne(
-            { _id: new ObjectId(id), "userProgress.email": email },
-            {
-              $set: {
-                [`userProgress.${userProgressIndex}`]: updatedProgress,
-              },
-            }
-          );
-        }
-
-        res.send({
-          message: "Day marked as completed!",
-          progress: updatedProgress,
-        });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Failed to update progress" });
-      }
-    });
-
-    app.post("/my-activities/:id/add-note", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { email, day, note } = req.body;
-
-        if (!email || !day || !note) {
-          return res
-            .status(400)
-            .send({ error: "Email, day, and note are required" });
-        }
-
-        const result = await challengesCollection.updateOne(
-          {
-            _id: new ObjectId(id),
-            "userProgress.email": email,
-          },
-          {
-            $push: {
-              "userProgress.$.notes": {
-                day,
-                note,
-                timestamp: new Date().toISOString(),
-              },
-            },
-          }
-        );
-
-        if (result.modifiedCount === 0) {
-          return res.status(404).send({ error: "Progress not found" });
-        }
-
-        res.send({ message: "Note added successfully!" });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Failed to add note" });
-      }
-    });
-
-    app.get("/challenges/:id/leaderboard", async (req, res) => {
-      try {
-        const id = req.params.id;
-
-        const challenge = await challengesCollection.findOne({
-          _id: new ObjectId(id),
-        });
-
-        if (!challenge) {
-          return res.status(404).send({ error: "Challenge not found" });
-        }
-
-        // Sort users by points
-        const leaderboard = (challenge.userProgress || [])
-          .sort((a, b) => b.pointsEarned - a.pointsEarned)
-          .slice(0, 10)
-          .map((user, index) => ({
-            rank: index + 1,
-            email: user.email,
-            pointsEarned: user.pointsEarned,
-            totalDaysCompleted: user.totalDaysCompleted,
-            currentStreak: user.currentStreak,
-            achievements: user.achievements,
-          }));
-
-        res.send(leaderboard);
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Failed to fetch leaderboard" });
-      }
-    });
-
-    app.get("/user-stats/:email", async (req, res) => {
-      try {
-        const email = req.params.email;
-
-        const challenges = await challengesCollection
-          .find({
-            joinedUsers: email,
-          })
-          .toArray();
-
-        // Calculate total stats
-        let totalPoints = 0;
-        let totalDaysCompleted = 0;
-        let totalChallenges = challenges.length;
-        let completedChallenges = 0;
-        let allAchievements = [];
-
-        challenges.forEach((challenge) => {
-          const userProgress = challenge.userProgress?.find(
-            (p) => p.email === email
-          );
-          if (userProgress) {
-            totalPoints += userProgress.pointsEarned;
-            totalDaysCompleted += userProgress.totalDaysCompleted;
-            allAchievements = [
-              ...allAchievements,
-              ...userProgress.achievements,
-            ];
-
-            if (userProgress.totalDaysCompleted >= challenge.duration) {
-              completedChallenges++;
-            }
-          }
-        });
-
-        // Unique achievements
-        const uniqueAchievements = [...new Set(allAchievements)];
-
-        res.send({
-          email,
-          totalPoints,
-          totalDaysCompleted,
-          totalChallenges,
-          completedChallenges,
-          activeChallenges: totalChallenges - completedChallenges,
-          achievements: uniqueAchievements,
-        });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Failed to fetch user stats" });
       }
     });
 
